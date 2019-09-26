@@ -1,0 +1,220 @@
+---
+title: "Practical Machine Learning - Project"
+author: "Hwan Sohn"
+date: "9/25/2019"
+output: html_document
+---
+
+# Overview
+
+From the project instruction and the provided data, we predict the manner in which the 6 participants did the exercise. In this report, we describe 1) how we built our model, 2)how we used cross validation, 3) what we think the expected out of sample error is, and 4) why we made the choice. Also we use the selected prediction model to predict 20 different test cases which can be used for the Project Prediction Quiz. 
+
+## Coding Environment
+
+For the reproducibility, we provided the R coding environments with packages information.<br>
+R version 3.6.1 (2019-07-05)<br>
+Platform: x86_64-w64-mingw32/x64 (64-bit) <br>
+Running under: Windows 10 x64 (build 15063)
+
+## Loaded packages:
+
+Caret(6.0.84), Hmisc(4.2.0), rattle(5.2.0), AppliedPredictiveModel, CORELearn(1.53.1),pgmm(1.2.3), rpart(4.1.15), ElemStatLearn(2015.6.26.2), ggplot2(3.2.1),  gbm(2.1.5), e1071(1.7.2), forecast(8.9), randomForest(4.6.14)
+
+```{r}
+# loaded packages
+library(caret)
+library(ggplot2)
+library(rpart)
+library(rattle)
+library(randomForest)
+set.seed(2341)
+```
+
+# Input Data
+
+##	Data Sources
+We get the data from the following sites which are provided by the project instruction. <br>
+Training data:  https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv <br>
+Test data: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv <br>
+
+
+## read csv file without data reducing 
+```{r}
+training.csv = read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",strip.white=TRUE, na.strings = c("NA", "", "#DIV/0!"))
+testing.csv = read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",strip.white=TRUE, na.strings = c("NA", "", "#DIV/0!"))
+dim(training.csv)
+dim(testing.csv)
+```
+
+# Data reducing
+
+Since the data size is large, it is better to reduce the size as much as possible. We remove NA valued variables, near zero variance variables, and non-predictor variables, After removing the NA related variables, we can reduce the variables from 160 to 60 which is a big reducing. Another thing we can reduce the data size is about near zero variance variables. After removing near zero variance variables, it reduces 1 variable only. We think this reducing is somewhat related to NA variable reducing. So many variables are already removed by the NA reducing. Anyway, this is also a way to reducing data size in general. For removing non-predictor columns, we found the column 1 to 7 from the csv files are not directly contribute to prediction. So we remove the columns. So the final variables are reduced to 52.
+
+## 1) remove NA
+
+```{r}
+# remove white space, "NA", "", "#DIV/0!" at read.csv()
+training_data <- training.csv[,colSums(is.na(training.csv))==0]
+testing_data <- testing.csv[,colSums(is.na(testing.csv))==0]
+dim(training_data)
+dim(testing_data)
+```
+
+## 2) remove near zero variance variables
+
+```{r}
+nzv_var <- nearZeroVar(training_data)
+training_data <- training_data[, -nzv_var]
+testing_data <- testing_data[, -nzv_var]
+dim(training_data)
+dim(testing_data)
+```
+
+## 3) Remove non-prediction related columns
+
+```{r}
+# Remove non-prediction related columns such as index, subject, timestamp, window etc.
+# "","user_name","raw_timestamp_part_1","raw_timestamp_part_2","cvtd_timestamp","new_window","num_window",
+training_data <-  training_data[, -(1:7)]
+testing_data <- testing_data[, -(1:7)]
+dim(training_data)
+dim(testing_data)
+```
+
+# Data Partition
+
+For building the models, we split the training data into 2 parts (training, and testing with 75% and 25% respectively). And we use the testing_data from the csv file for validation sample.
+
+```{r}
+### split training data into 2 parts training(75%), testing(25%)
+inTrain <- createDataPartition(training_data$classe, p=0.75, list=FALSE)
+training <- training_data[inTrain,]
+testing <- training_data[-inTrain,]
+dim(training)
+dim(testing)
+```
+
+# Cross validation
+
+For the cross validation, we first consider how we split the training data into training and testing. When we prepare input data, we already splitted the original pml-training.csv into training and testing parts(75%, 25%). In addition to the split, we use resampling method with k-fold cross validation in trainControl() function. If k is large enough, we will have less biased model in general. We applied this method to build gbm(Gradiant Boosting Model) and rf(Random Forest) models.
+
+
+```{r fit_control}
+fit_control <- trainControl(
+	method = "cv", 	# resampling method
+	number = 3, 	# number of resampling iterations
+	)
+```
+
+# Model Building
+
+## 1) decition tree model (rpart)
+
+We used CART model with rpart() function to build decision tree model (dt_fit). With the model, we get the prediction(pred_dt).  And get confusionMatrix of this model with testing$classe (cm_dt). The overall predictive accuracy is 73.25% and the expected out-of-sample-error is about 26.75%. To see the picture of decision tree, we used fancyRpartPlot() but it is very hard to see the details. 
+
+```{r decition tree model}
+set.seed(2341)
+dt_fit <- rpart(classe ~ ., data = training, method="class")
+# plot with facyRpartPlot
+fancyRpartPlot(dt_fit)
+
+# build using train() function, but this method is only for my own experiment with the same fit_control, 
+# the result is similar but takes longer time
+# dt_fit <- train(classe ~ ., data=training, method="rpart", trControl=fit_control, tuneLength=10)
+
+# prediction of dtm model on testing
+pred_dt <- predict(dt_fit, newdata = testing, type="class")
+cm_dt <- confusionMatrix(pred_dt, testing$classe)
+cm_dt
+```
+				  
+
+## 2) Gradient Boosted Model (gbm)
+
+In gbm method, we use the train() function with the result of trainControl() for cross validation with same seed for the reproducibility. In this model, we get about 96% predictive accuracy. It is much better accuracy than decision tree model. And the expected out-of-sample-error is about 3.7%
+
+```{r Gradient Boosted Model}
+set.seed(2341)
+gbm_fit <- train(classe ~ ., data=training, method="gbm", trControl=fit_control, verbose=FALSE)
+gbm_fit$finalModel
+
+# prediction of gbm on testing
+pred_gbm <- predict(gbm_fit, newdata=testing)
+cm_gbm <- confusionMatrix(pred_gbm, testing$classe)
+cm_gbm
+```
+
+## 3) random forest model (rf)
+
+In random forest method, we use the train() function with the same result of trainControl() for cross validation with same seed for the reproducibility. In this model, we get about 99.5% predictive accuracy. It is much better accuracy than decision tree model. And the expected out-of-sample-error is about 0.45%
+
+```{r random forest model}
+set.seed(2341)
+rf_fit <- train(classe ~., data=training, method="rf", trControl=fit_control, verbose=FALSE)
+rf_fit$finalModel
+
+# prediction of rf on testing
+pred_rf <- predict(rf_fit, newdata=testing)
+cm_rf <- confusionMatrix(pred_rf, testing$classe)
+cm_rf
+```
+
+## plot for rf_fit model
+```{r}
+plot(rf_fit)
+```
+
+
+# Choice of best model
+
+Among the three models, we compare the accuracies. And the random forest model is the most accurate. So the our choice should be Random Forest model (rf_fit). From our best model, we get important variables from varImp(rf_fit). From this, we are able to suggest which feature is more important etc.
+
+## Accuracy comparison of 3 models
+
+```{r Accuracy comparison}
+Accuracies <- data.frame(
+  Model = c('dt', 'gbm', 'rf'),
+  Accuracy = rbind(cm_dt$overall[1], cm_gbm$overall[1], cm_rf$overall[1])
+)
+Accuracies
+```
+
+## Important features
+
+```{r important features}
+varImp(rf_fit)
+```
+
+# Quiz:
+
+## Answer (predict) the quiz
+
+From the selected model, we answer(predict) the quiz using testing_data which came from pml-testing.csv.
+
+```{r Quiz}
+# now apply the selected model to testing_data to answer(predict) the Quiz
+pred_quiz <- predict(rf_fit, newdata = testing_data)
+pred_quiz
+```
+
+## Answer with a better format
+
+```{r Quiz-format}
+pred_quiz <- predict(rf_fit, newdata=testing_data)
+quiz_Results <- data.frame(
+  problem_id=testing_data$problem_id,
+  predicted=pred_quiz
+)
+print(quiz_Results)
+```
+
+## Quiz result:
+
+Quiz passed with 20/20
+
+
+# Reference
+
+The caret package:  http://topepo.github.io/caret/index.html <br>
+Tree-based models: https://www.statmethods.net/advstats/cart.html <br>
+
